@@ -1,40 +1,55 @@
 # Its own workspace root, so this repository builds on its own.
-#
-# Every module repository carries this and the template did not, which stopped
-# mattering the moment the template stopped sitting beside the estate: nested at
-# template/rust, cargo walked up, found the root workspace and refused to build.
-#
-# It would have bitten a generated repository the same way. A template that does
-# not obey the estate's rules produces repositories that start out breaking
-# them — doc/governance/rust-style.md section 4.
 [workspace]
 
 [package]
-name = "xmip-template-rust"
+name = "xmip-core-transport-mysql"
 version = "0.1.0"
 edition = "2024"
 license = "AGPL-3.0-or-later"
-repository = "https://github.com/IlleNilsson/xmip-template-rust"
-description = "Starter template for a Rust Xmip module repository."
+repository = "https://github.com/IlleNilsson/xmip-core-transport-mysql"
+description = "MySQL transport: one row of a query is one Stream, a send is one INSERT; xmip-core-library-mariadb's protocol with MySQL's caching_sha2_password, full authentication over the estate's TLS or the server's RSA key. A xmip-core-transport technology."
 publish = false
 
 [lib]
 path = "src/lib.rs"
 
+[dependencies]
+# A Technology depends on its parent Capability, never the reverse
+# (repository-model.md).
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+# The settings this technology declares (xcore::settings), read through
+# transport::Configured (ADR-0064, amendment 2026-09-26).
+xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+# The protocol MySQL shares with MariaDB, both halves, and the native
+# password a server may still switch an account to.
+mariadb = { package = "xmip-core-library-mariadb", git = "https://github.com/IlleNilsson/xmip-core-library-mariadb", branch = "main" }
+# SQL: the dialect MySQL reads as MariaDB writes it — its literals, its
+# binary form, the INSERT a send writes.
+sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main" }
+# The operating system's random source, which OAEP's seed is drawn from.
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+# caching_sha2_password: SHA-256 for the scramble, and RSA-OAEP for the
+# password sent to a server's public key outside TLS. MySQL pads with
+# OAEP over SHA-1, so sha1 is here as the digest rsa's OAEP takes; it
+# hashes nothing else.
+sha2 = "0.11"
+rsa = "0.9"
+sha1 = "0.10"
+
+[dev-dependencies]
+# The loopback payloads the tests drive, from the capability's test
+# support and never a production build (ADR-0044).
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
+# A self-signed certificate for the guarded login's test. Test-only.
+rcgen = "0.13"
+# The trust store the guarded login's test checks that certificate in.
+tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main" }
+
 [lints.rust]
-# forbid, not deny: a module has no business writing unsafe. The one exception
-# in the estate is xmip-core-abi, which holds the extern "C" vtable over
-# include/xmip_module.h and lowers this to deny with a reason at the call site.
 unsafe_code = "forbid"
 
 [lints.clippy]
-# Warned, never denied. doc/governance/rust-style.md section 3: a function
-# length gate was tried in this estate's PowerShell and produced a sixteen-entry
-# waiver list while catching nothing. The number worth reading is branches, and
-# clippy prints both.
 too_many_lines = "warn"
-
-# The ones that catch real defects rather than taste.
 pedantic = { level = "warn", priority = -1 }
 missing_errors_doc = "warn"
 missing_panics_doc = "warn"
