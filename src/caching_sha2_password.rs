@@ -247,7 +247,7 @@ mod tests {
         let third = Sha256::digest(&salted);
         let expected: Vec<u8> = first.iter().zip(third.iter()).map(|(a, b)| a ^ b).collect();
         assert_eq!(scrambled, expected);
-        assert!(scramble("", &nonce).is_empty());
+        assert_eq!(scramble("", &nonce), [] as [u8; 0]);
         assert_ne!(scramble("secret", &[0; 20]), scrambled, "another nonce");
     }
 
