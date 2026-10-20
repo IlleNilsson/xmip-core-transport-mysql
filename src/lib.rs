@@ -28,7 +28,7 @@
 //! `MariaDB` dialect of `xmip-core-library-sql`, which MySQL reads the same:
 //! backtick identifiers, backslash escapes, the `X'…'` literal.
 //!
-//! Rows are artefacts and this transport claims none of them, per ADR-0024,
+//! Rows are artifacts and this transport claims none of them, per ADR-0024,
 //! for the reason the `MariaDB` transport gives: a receive holds no
 //! transaction to claim one in. **A row is consumed by the `accept`
 //! statement, after its cycle**, its name bound in place of `?`
@@ -319,7 +319,7 @@ impl Transport for MySqlTransport {
         })
     }
 
-    /// Rows are artefacts, and one receive holds no transaction to claim
+    /// Rows are artifacts, and one receive holds no transaction to claim
     /// one in.
     fn claims(&self) -> Option<&dyn ResourceClaim> {
         Some(&NoNativeClaim)
