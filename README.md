@@ -32,8 +32,8 @@ in it, the library's.
 
 ## Settings
 
-As the MariaDB transport's: `database`, `user` (the password through the
-Location's credentials), `query`, `accept`, `column`, `encoding`, `timeout`,
+As the MariaDB transport's: `database`, `user` (the password the secret
+the Location names), `query`, `accept`, `column`, `encoding`, `timeout`,
 `tls` and `tls_name`. The SQL is `sql::MARIADB` from `xmip-core-library-sql`,
 which MySQL reads the same: backtick identifiers, backslash escapes, the
 `X'…'` literal. A binary column's receive query spells a BLOB out:
