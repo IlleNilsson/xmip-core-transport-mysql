@@ -41,7 +41,7 @@ sha1 = "0.10"
 # support and never a production build (ADR-0044).
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
 # A self-signed certificate for the guarded login's test. Test-only.
-rcgen = "0.13"
+rcgen = "0.14"
 # The trust store the guarded login's test checks that certificate in.
 tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main" }
 
