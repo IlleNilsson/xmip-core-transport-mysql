@@ -1,7 +1,7 @@
 //! `caching_sha2_password`, MySQL's login since 8.0 and its only one since
 //! 9.0, which removed `mysql_native_password` (8.4 had it off unless the
 //! server was started with it). Both ends: the client this crate logs in
-//! with, and the far end its tests and the Playground serve.
+//! with, and the far end its tests and the Essentials serve.
 //!
 //! **The fast path.** The first answer is `SHA256(password) XOR
 //! SHA256(SHA256(SHA256(password)) + nonce)`. A server that holds the
