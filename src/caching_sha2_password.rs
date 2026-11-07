@@ -22,7 +22,7 @@
 //! MySQL's to change, and so this crate's alone: the library holds the
 //! protocol `MariaDB` and MySQL share, and nothing here reaches it.
 
-use std::sync::OnceLock;
+use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use mariadb::{Authentication, Conversation, Result, Step, Verification, protocol_error};
@@ -138,14 +138,14 @@ impl CachingSha2Cache {
     /// The key this process's far ends hold, made the first time a client
     /// in the clear asks for it.
     fn key() -> &'static (RsaPrivateKey, String) {
-        static KEY: OnceLock<(RsaPrivateKey, String)> = OnceLock::new();
-        KEY.get_or_init(|| {
+        static KEY: LazyLock<(RsaPrivateKey, String)> = LazyLock::new(|| {
             let private = RsaPrivateKey::new(&mut Random, KEY_BITS).expect("an RSA key");
             let public = RsaPublicKey::from(&private)
                 .to_public_key_pem(LineEnding::LF)
                 .expect("a public key in PEM");
             (private, public)
-        })
+        });
+        &KEY
     }
 
     /// Whether the account has logged in fully since this far end started.
