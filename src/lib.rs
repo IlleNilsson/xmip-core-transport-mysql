@@ -49,7 +49,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use mariadb::{Authentication, Client, Expecting, Guard, Insert, Logon, NativePassword, Session};
-use sql::MARIADB;
 use transport::ArrivalIdentity;
 use transport::claim::{NoNativeClaim, ResourceClaim};
 use transport::error::{Result, protocol_error};
@@ -286,8 +285,10 @@ impl Transport for MySqlTransport {
     /// where one is declared — on `Accepted`, never on `Refused` or
     /// `Failed` — and tells the database nothing where none is.
     fn receive_up_to(&self, most: usize) -> Result<Vec<Arrived>> {
-        let result = self.exchange(&self.server, &self.database, |client| {
-            client.query(&self.query)
+        let (result, dialect) = self.exchange(&self.server, &self.database, |client| {
+            client
+                .query(&self.query)
+                .map(|result| (result, client.dialect()))
         })?;
         let shared = Arc::new(self.clone());
         accept::arrivals(
@@ -296,10 +297,10 @@ impl Transport for MySqlTransport {
             &self.refused,
             |name| format!("{SCHEME}://{}/{}?row={name}", self.server, self.database),
             Clone::clone,
-            |value| self.column.bytes(&value, &MARIADB),
+            |value| self.column.bytes(&value, dialect),
             |name| {
                 let transport = Arc::clone(&shared);
-                accept::accepting(&MARIADB, self.accept.as_deref(), name, move |sql| {
+                accept::accepting(dialect, self.accept.as_deref(), name, move |sql| {
                     transport.exchange(&transport.server, &transport.database, |client| {
                         client.execute(sql).map(|_| ())
                     })
@@ -317,8 +318,14 @@ impl Transport for MySqlTransport {
     fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
         let bytes: &[u8] = &outgoing.gather()?;
         let to = destination(SCHEMES, target, &self.server, &self.database)?;
-        let literal = self.column.literal(bytes, &MARIADB)?;
-        let insert = MARIADB.insert(to.table, to.column, &literal);
+        // A Stream that is not the column's text is refused here, before any
+        // connection; the literal sent is written as the session reads it,
+        // a backslash escaped, or itself under NO_BACKSLASH_ESCAPES.
+        self.column.literal(bytes, &sql::MARIADB)?;
+        let dialect: &sql::Dialect =
+            self.exchange(to.server, to.database, |client| Ok(client.dialect()))?;
+        let literal = self.column.literal(bytes, dialect)?;
+        let insert = dialect.insert(to.table, to.column, &literal);
         self.exchange(to.server, to.database, |client| {
             client.execute(&insert).map(|_| ())
         })
