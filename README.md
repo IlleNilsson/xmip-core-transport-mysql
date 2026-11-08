@@ -34,9 +34,11 @@ in it, the library's.
 
 As the MariaDB transport's: `database`, `user` (the password the secret
 the Location names), `query`, `accept`, `column`, `encoding`, `timeout`,
-`tls` and `tls_name`. The SQL is `sql::MARIADB` from `xmip-core-library-sql`,
+`tls` and `tls_name`. The SQL is `xmip-core-library-sql`'s MariaDB dialect,
 which MySQL reads the same: backtick identifiers, backslash escapes, the
-`X'…'` literal. A binary column's receive query spells a BLOB out:
+`X'…'` literal — `sql::MARIADB_NO_BACKSLASH_ESCAPES` where the server's
+status flags carry `NO_BACKSLASH_ESCAPES` (`0x0200`), as the session reads it
+(`mariadb::Client::dialect`). A binary column's receive query spells a BLOB out:
 `SELECT id, CONCAT('0x', HEX(payload)) FROM inbox`.
 
 The origin URI is `mysql://server/<database>?row=<name>`; a send target is
