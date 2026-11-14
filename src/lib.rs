@@ -18,22 +18,15 @@
 //! not hold the account asks for — goes over the estate's TLS where
 //! `tls = true`, and encrypted to the server's RSA key otherwise.
 //!
-//! A Receive Location runs its query — `SELECT id, payload FROM inbox
-//! ORDER BY id` unless told otherwise — and hands each row up; a Send
-//! Location inserts the Stream as one column of one row. What the column
-//! holds is the Location's to declare (ADR-0038), as for every SQL
-//! transport (`transport::sql`): `column = "binary"`, the default, inserts
-//! an `X'…'` literal and reads a value back from a hex form; `column =
-//! "text"` decodes the Stream strictly in its `encoding`. The SQL is the
-//! `MariaDB` dialect of `xmip-core-library-sql`, which MySQL reads the same:
-//! backtick identifiers, backslash escapes, the `X'…'` literal.
-//!
-//! Rows are artifacts and this transport claims none of them, per ADR-0024,
-//! for the reason the `MariaDB` transport gives: a receive holds no
-//! transaction to claim one in. **A row is consumed by the `accept`
-//! statement, after its cycle**, its name bound in place of `?`
-//! (`transport::sql::accept`); a refused row is left and not received
-//! again while unchanged; a failed one is read again.
+//! **The transport is every SQL technology's**, `transport::sql`'s
+//! `SqlTransport` over this crate's [`MySql`] wire (2026-11-13): a Receive
+//! Location runs its query and hands each row up; the `accept` statement
+//! consumes a row after its cycle; a Send Location inserts the Stream as
+//! one column of one row; what the column holds is the Location's to
+//! declare (ADR-0038). The SQL is the `MariaDB` dialect of
+//! `xmip-core-library-sql`, which MySQL reads the same: backtick
+//! identifiers, backslash escapes, the `X'…'` literal, in the mode the
+//! session reads.
 //!
 //! The origin URI carries what the row knew: `mysql://server/orders?row=41`.
 //! A send target is `mysql://host:3306/<database>/<table>/<column>`,
@@ -48,156 +41,98 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::time::Duration;
 
-use mariadb::{Authentication, Client, Expecting, Guard, Insert, Logon, NativePassword, Session};
-use transport::ArrivalIdentity;
-use transport::claim::{NoNativeClaim, ResourceClaim};
+use mariadb::{Authentication, Client, Expecting, Insert, Logon, NativePassword, Session};
+use sql::Dialect;
+use tls::ClientSettings;
 use transport::error::{Result, protocol_error};
-use transport::listening::{Accepting, Listening};
-use transport::loopback::{FarEnd, LOOPBACK_TIMEOUT, Loopback};
-use transport::pool::{Pooled, alive};
+use transport::pool::alive;
 use transport::socket;
-use transport::sql::{Column, accept, destination};
-use transport::{Arrived, Directions, Login, Pool, Taken, Transport};
+use transport::sql::{Probe, Rows, SqlTransport, Wire};
+use transport::{Login, Taken};
+use xcore::settings::{Read, Settings};
 
 pub use caching_sha2_password::{CachingSha2Cache, CachingSha2Password};
-
-/// The scheme a send target opens with and an origin carries.
-const SCHEME: &str = "mysql";
-/// The schemes a send target may open with.
-const SCHEMES: &[&str] = &[SCHEME];
 
 /// The plugins this crate logs in with: MySQL's own first, and the native
 /// password a server may still switch an account to.
 const PLUGINS: &[&dyn Authentication] = &[&CachingSha2Password, &NativePassword];
 
-/// What a Receive Location runs unless told otherwise.
-pub const DEFAULT_QUERY: &str = "SELECT id, payload FROM inbox ORDER BY id";
+/// A Location over a MySQL server.
+pub type MySqlTransport = SqlTransport<MySql>;
 
-/// What the loopback pair agrees on: one database, one user and password
-/// the far end demands and the near end gives, one table and column the
-/// payload is inserted into.
-const LOOPBACK_DATABASE: &str = "probe";
-const LOOPBACK_USER: &str = "xmip";
-const LOOPBACK_PASSWORD: &str = "xmip";
-const LOOPBACK_TARGET: &str = "probe/payload";
-
-#[derive(Clone)]
-pub struct MySqlTransport {
-    /// The secret its Location names, whose password the login presents,
-    /// read at each login (ADR-0019, amendment 2026-10-29).
-    secret: Option<transport::Secured>,
-    server: String,
-    database: String,
-    login: Login,
-    query: String,
-    /// The statement run on a row's verdict, its name bound in.
-    accept: Option<String>,
-    /// The rows refused and left, not received again while unchanged.
-    /// Cloned, the same memory.
-    refused: accept::RefusedRows,
-    column: Column,
-    timeout: Option<Duration>,
+/// MySQL's wire: `xmip-core-library-mariadb`'s client with MySQL's
+/// logins, TLS before the login where asked for, and the far end's memory
+/// of a full login.
+#[derive(Clone, Default)]
+pub struct MySql {
     /// TLS before the login, where asked for.
-    guard: Option<Guard>,
-    /// The connections a send inserts on and a receive queries on, logged
-    /// in once per server and database and kept.
-    connections: Pool<Kept>,
-    /// What this transport's far end remembers of a full login. Cloned,
+    guard: Option<ClientSettings>,
+    /// What this technology's far end remembers of a full login. Cloned,
     /// the same memory.
     cache: Arc<CachingSha2Cache>,
 }
 
-/// A logged-in connection, kept while the server keeps it open.
-pub struct Kept(Client);
-
-impl Pooled for Kept {
-    /// While the server has not closed the connection — its `wait_timeout`
-    /// closes an idle one. Each `COM_QUERY` is read to its end, so nothing
-    /// of one is left for the next.
-    fn usable(&mut self) -> bool {
-        alive(self.0.socket())
-    }
-}
-
-impl MySqlTransport {
-    /// Speak to the server at `server`, on `database`, as `user` with no
-    /// password until one is given.
+impl MySql {
+    /// Logging in under TLS, as `guard` says.
     #[must_use]
-    pub fn new(
-        server: impl Into<String>,
-        database: impl Into<String>,
-        user: impl Into<String>,
-    ) -> Self {
+    pub fn guarded(guard: ClientSettings) -> Self {
         Self {
-            secret: None,
-            server: server.into(),
-            database: database.into(),
-            login: Login::new(user, ""),
-            query: DEFAULT_QUERY.to_string(),
-            accept: None,
-            refused: accept::RefusedRows::default(),
-            column: Column::Binary,
-            timeout: None,
-            guard: None,
-            connections: Pool::new(),
+            guard: Some(guard),
             cache: Arc::default(),
         }
     }
 
-    /// The password the login proves.
+    /// The TLS a login is guarded by, where one is.
     #[must_use]
-    pub fn with_password(mut self, password: impl Into<String>) -> Self {
-        self.login.password = password.into();
-        self
+    pub const fn guard(&self) -> Option<&ClientSettings> {
+        self.guard.as_ref()
     }
 
-    /// The query a receive runs: the first column is the row's name, the
-    /// last is the Stream.
+    /// What the far end remembers of a full login.
     #[must_use]
-    pub fn with_query(mut self, query: impl Into<String>) -> Self {
-        self.query = query.into();
-        self
+    pub fn cache(&self) -> &CachingSha2Cache {
+        &self.cache
+    }
+}
+
+impl Wire for MySql {
+    type Client = Client;
+
+    const NAME: &'static str = "mysql";
+    const SCHEMES: &'static [&'static str] = &["mysql"];
+    const SETTINGS: &'static Settings = configured::SETTINGS;
+    /// A login with a password, so `caching_sha2_password` is spoken whole.
+    const PROBE: Probe = Probe {
+        database: "probe",
+        user: "xmip",
+        password: "xmip",
+        target: "probe/payload",
+    };
+
+    fn dialect() -> &'static Dialect {
+        &sql::MARIADB
     }
 
-    /// The statement run once a row's cycle accepted it, the row's name in
-    /// place of the dialect's first parameter (`transport::sql::accept`).
-    #[must_use]
-    pub fn with_accept(mut self, statement: impl Into<String>) -> Self {
-        self.accept = Some(statement.into());
-        self
+    /// The session's mode: a backslash escaped, or itself where the
+    /// server's status flags carry `NO_BACKSLASH_ESCAPES`.
+    fn session_dialect(client: &Client) -> Option<&'static Dialect> {
+        Some(client.dialect())
     }
 
-    /// What the payload column holds: bytes unless declared otherwise.
-    #[must_use]
-    pub const fn holding(mut self, column: Column) -> Self {
-        self.column = column;
-        self
+    fn configured(self, settings: &Read) -> Result<Self> {
+        Ok(Self {
+            guard: transport::sql::client_tls(settings),
+            ..self
+        })
     }
 
-    /// Give up on a server that stops mid-packet.
-    #[must_use]
-    pub const fn timing_out_after(mut self, timeout: Duration) -> Self {
-        self.timeout = Some(timeout);
-        self
-    }
-
-    /// Log in under TLS, as `guard` says.
-    #[must_use]
-    pub fn guarded(mut self, guard: Guard) -> Self {
-        self.guard = Some(guard);
-        self
-    }
-
-    /// Log in to the server.
-    ///
-    /// # Errors
-    /// Where the server could not be reached or refused the login.
-    pub fn connect(&self) -> Result<Client> {
-        self.connect_to(&self.server, &self.database)
-    }
-
-    fn connect_to(&self, server: &str, database: &str) -> Result<Client> {
-        let presented = transport::secured::logged_in(&self.login, self.secret.as_ref(), "mysql")?;
+    fn connect(
+        &self,
+        server: &str,
+        database: &str,
+        presented: &Login,
+        timeout: Option<Duration>,
+    ) -> Result<Client> {
         let logon = Logon {
             user: &presented.user,
             password: &presented.password,
@@ -205,190 +140,79 @@ impl MySqlTransport {
             plugins: PLUGINS,
             guard: self.guard.as_ref(),
         };
-        Ok(Client::connect(server, &logon, self.timeout)?)
+        Ok(Client::connect(server, &logon, timeout)?)
     }
 
-    /// One query or statement on the connection kept for `server` and
-    /// `database`, logged in on the first.
-    fn exchange<T>(
-        &self,
-        server: &str,
-        database: &str,
-        mut work: impl FnMut(&mut Client) -> mariadb::Result<T>,
-    ) -> Result<T> {
-        self.connections.exchange(
-            &format!("{server}/{database}"),
-            || self.connect_to(server, database).map(Kept),
-            |kept| Ok(work(&mut kept.0)?),
-        )
+    /// While the server has not closed the connection — its `wait_timeout`
+    /// closes an idle one. Each `COM_QUERY` is read to its end, so nothing
+    /// of one is left for the next.
+    fn usable(client: &mut Client) -> bool {
+        alive(client.socket())
     }
 
-    /// Bind as the far end clients connect to, and report the address.
-    ///
-    /// # Errors
-    /// Where the address is taken, malformed, or not permitted.
-    pub fn bind(&self) -> Result<(TcpListener, String)> {
-        socket::bind_tcp(&self.server)
+    fn query(client: &mut Client, sql: &str) -> Result<Rows<String>> {
+        Ok(client.query(sql)?.rows)
     }
 
-    /// The login this transport's far end admits: its user and password,
-    /// checked by `caching_sha2_password` against its cache.
-    #[must_use]
-    pub fn expecting(&self) -> Expecting<'_> {
-        Expecting::new(&self.login.user, &self.login.password, &*self.cache)
+    fn execute(client: &mut Client, sql: &str) -> Result<()> {
+        client.execute(sql)?;
+        Ok(())
     }
 
-    /// Accept one client on an already-bound listener, demanding this
-    /// transport's user and password.
-    ///
-    /// # Errors
-    /// Where the connection could not be accepted or the login failed.
-    pub fn accept_one(&self, listener: &TcpListener) -> Result<Session> {
-        let (stream, _) = socket::accept_tcp(listener, self.timeout)?;
-        Ok(Session::accept(stream, &self.expecting())?)
+    /// The key a login in the clear is answered with, made before the far
+    /// end is bound.
+    fn ready_far_end(&self) {
+        CachingSha2Cache::ready();
     }
 
-    /// The Stream `insert` carries, as this transport's column holds it,
-    /// its origin where `session` received it.
-    #[must_use]
-    pub fn taken(&self, session: &Session, insert: Insert) -> Taken {
-        let origin = format!(
-            "{SCHEME}://{}/{}/{}/{}",
-            session.peer(),
-            session.database(),
-            insert.table,
-            insert.column
-        );
-        Taken::new(origin, self.column.stored(insert.literal))
-    }
-}
-
-impl Transport for MySqlTransport {
-    fn name(&self) -> &'static str {
-        SCHEME
-    }
-
-    fn directions(&self) -> Directions {
-        Directions::BOTH
-    }
-
-    fn arrivals(&self) -> transport::Arrivals {
-        transport::Arrivals::Ordered("a poll reads again what is not yet told")
-    }
-
-    fn waiting(&self) -> transport::Waiting {
-        transport::Waiting::Polled("a receive runs the query and returns")
-    }
-
-    /// Run the query on the connection kept for the server and database;
-    /// each row is a Stream, whole. Its verdict runs the `accept` statement
-    /// where one is declared — on `Accepted`, never on `Refused` or
-    /// `Failed` — and tells the database nothing where none is.
-    fn receive_up_to(&self, most: usize) -> Result<Vec<Arrived>> {
-        let (result, dialect) = self.exchange(&self.server, &self.database, |client| {
-            client
-                .query(&self.query)
-                .map(|result| (result, client.dialect()))
-        })?;
-        let shared = Arc::new(self.clone());
-        accept::arrivals(
-            result.rows,
-            most,
-            &self.refused,
-            |name| format!("{SCHEME}://{}/{}?row={name}", self.server, self.database),
-            Clone::clone,
-            |value| self.column.bytes(&value, dialect),
-            |name| {
-                let transport = Arc::clone(&shared);
-                accept::accepting(dialect, self.accept.as_deref(), name, move |sql| {
-                    transport.exchange(&transport.server, &transport.database, |client| {
-                        client.execute(sql).map(|_| ())
-                    })
-                })
-            },
-        )
-    }
-
-    fn sending(&self) -> transport::Sending {
-        transport::Sending::Gathered("an INSERT carries the body as one literal in its statement")
-    }
-
-    /// Insert the bytes as one column of one row, on the connection kept
-    /// for the server and database.
-    fn send_from(&self, target: &str, outgoing: transport::Outgoing<'_>) -> Result<()> {
-        let bytes: &[u8] = &outgoing.gather()?;
-        let to = destination(SCHEMES, target, &self.server, &self.database)?;
-        // A Stream that is not the column's text is refused here, before any
-        // connection; the literal sent is written as the session reads it,
-        // a backslash escaped, or itself under NO_BACKSLASH_ESCAPES.
-        self.column.literal(bytes, &sql::MARIADB)?;
-        let dialect: &sql::Dialect =
-            self.exchange(to.server, to.database, |client| Ok(client.dialect()))?;
-        let literal = self.column.literal(bytes, dialect)?;
-        let insert = dialect.insert(to.table, to.column, &literal);
-        self.exchange(to.server, to.database, |client| {
-            client.execute(&insert).map(|_| ())
-        })
-    }
-
-    /// Rows are artifacts, and one receive holds no transaction to claim
-    /// one in.
-    fn claims(&self) -> Option<&dyn ResourceClaim> {
-        Some(&NoNativeClaim)
-    }
-}
-
-impl MySqlTransport {
-    /// Both ends on this machine: an ephemeral local port, a login with a
-    /// password, so `caching_sha2_password` is spoken whole, the loopback
-    /// timeout.
-    #[must_use]
-    pub fn loopback() -> Self {
-        Self::new("127.0.0.1:0", LOOPBACK_DATABASE, LOOPBACK_USER)
-            .with_password(LOOPBACK_PASSWORD)
-            .timing_out_after(LOOPBACK_TIMEOUT)
-    }
-}
-
-impl Accepting for MySqlTransport {
-    fn take_one(self, listener: &TcpListener) -> Result<Taken> {
-        // The client keeps its connection for the next insert.
-        let mut session = self.accept_one(listener)?;
+    /// The client keeps its connection for the next insert.
+    fn take_one(transport: &MySqlTransport, listener: &TcpListener) -> Result<Taken> {
+        let mut session = accept_one(transport, listener)?;
         let insert = session
             .next_insert()?
             .ok_or_else(|| protocol_error("the client closed without inserting"))?;
-        Ok(self.taken(&session, insert))
+        Ok(taken(transport, &session, insert))
     }
 }
 
-impl Loopback for MySqlTransport {
-    fn arrival_identity(&self) -> ArrivalIdentity {
-        ArrivalIdentity::Unnamed(
-            "a row names no sender: the database it was read from is in its origin",
-        )
-    }
+/// The login `transport`'s far end admits: its user and password, checked
+/// by `caching_sha2_password` against its cache.
+#[must_use]
+pub fn expecting(transport: &MySqlTransport) -> Expecting<'_> {
+    let login = transport.login();
+    Expecting::new(&login.user, &login.password, transport.wire().cache())
+}
 
-    fn far_end(&self) -> Result<Box<dyn FarEnd>> {
-        Ok(Box::new(Listening::new(self.clone(), self.bind()?)))
-    }
+/// Accept one client on a listener `transport` bound, demanding its user
+/// and password.
+///
+/// # Errors
+/// Where the connection could not be accepted or the login failed.
+pub fn accept_one(transport: &MySqlTransport, listener: &TcpListener) -> Result<Session> {
+    let (stream, _) = socket::accept_tcp(listener, transport.timeout())?;
+    Ok(Session::accept(stream, &expecting(transport))?)
+}
 
-    /// INSERT the payload as one column of one row from a fresh near end
-    /// logging in to `address` as this transport does.
-    fn send_to(&self, address: &str, payload: &[u8]) -> Result<()> {
-        let near = Self {
-            server: address.to_string(),
-            ..self.clone()
-        };
-        near.send(LOOPBACK_TARGET, payload)
-    }
+/// The Stream `insert` carries, as `transport`'s column holds it, its
+/// origin where `session` received it.
+#[must_use]
+pub fn taken(transport: &MySqlTransport, session: &Session, insert: Insert) -> Taken {
+    MySqlTransport::inserted(
+        session.peer(),
+        session.database(),
+        &insert.table,
+        &insert.column,
+        transport.column().stored(insert.literal),
+    )
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use transport::Configured;
     use transport::error::TransportError;
     use transport::payload::edge_payloads;
+    use transport::sql::DEFAULT_QUERY;
+    use transport::{Configured, Loopback, Transport};
     use xcore::settings::Applies;
 
     fn secs(n: u64) -> Duration {
@@ -406,13 +230,10 @@ mod tests {
             ("tls".to_string(), Given::Boolean(true)),
         ];
         let built = MySqlTransport::open("db:3306", Applies::Receive, &given).expect("built");
-        assert_eq!(
-            (built.server.as_str(), built.database.as_str()),
-            ("db:3306", "orders")
-        );
-        assert_eq!(built.query, DEFAULT_QUERY);
+        assert_eq!((built.server(), built.database()), ("db:3306", "orders"));
+        assert_eq!(built.query(), DEFAULT_QUERY);
         assert!(
-            built.guard.as_ref().expect("guarded").name.is_none(),
+            built.wire().guard().expect("guarded").name().is_none(),
             "the host's name"
         );
         assert_eq!(built.name(), "mysql");
@@ -434,14 +255,14 @@ mod tests {
             Ok::<_, TransportError>(())
         });
         assert!(
-            !far_end.cache.holds(),
+            !far_end.wire().cache().holds(),
             "a server just started holds no account"
         );
-        let mut session = far_end.accept_one(&listener).expect("full");
-        assert!(far_end.cache.holds(), "a full login is remembered");
+        let mut session = accept_one(&far_end, &listener).expect("full");
+        assert!(far_end.wire().cache().holds(), "a full login is remembered");
         let insert = session.next_insert().expect("insert").expect("one");
-        assert_eq!(far_end.taken(&session, insert).bytes, b"first");
-        far_end.accept_one(&listener).expect("fast");
+        assert_eq!(taken(&far_end, &session, insert).bytes, b"first");
+        accept_one(&far_end, &listener).expect("fast");
         sender.join().expect("thread").expect("sending");
     }
 
@@ -457,7 +278,7 @@ mod tests {
                 .timing_out_after(secs(5))
                 .send("inbox/payload", b"x")
         });
-        let error = far_end.accept_one(&listener).err().expect("refused");
+        let error = accept_one(&far_end, &listener).err().expect("refused");
         assert!(error.message.contains("Access denied for user 'xmip'"));
         let refused = sender.join().expect("thread").expect_err("refused");
         assert!(!refused.retryable);
@@ -485,18 +306,20 @@ mod tests {
         let near = MySqlTransport::new(address, "orders", "xmip")
             .with_password("secret")
             .timing_out_after(secs(5))
-            .guarded(Guard {
-                trust: Some(Arc::new(trust)),
-                name: Some("localhost".into()),
-            });
+            .with_wire(MySql::guarded(
+                ClientSettings::trusting(Arc::new(trust)).named("localhost"),
+            ));
         let sender = std::thread::spawn(move || near.send("inbox/payload", b"guarded"));
         let (stream, _) = socket::accept_tcp(&listener, Some(secs(5))).expect("accepted");
-        let expecting = far_end.expecting().guarded(Arc::new(served));
+        let expecting = expecting(&far_end).guarded(Arc::new(served));
         let mut session = Session::accept(stream, &expecting).expect("logged in");
         assert!(session.guarded());
-        assert!(far_end.cache.holds(), "the password came whole, under TLS");
+        assert!(
+            far_end.wire().cache().holds(),
+            "the password came whole, under TLS"
+        );
         let insert = session.next_insert().expect("insert").expect("one");
-        assert_eq!(far_end.taken(&session, insert).bytes, b"guarded");
+        assert_eq!(taken(&far_end, &session, insert).bytes, b"guarded");
         sender.join().expect("thread").expect("sending");
     }
 
@@ -537,8 +360,7 @@ mod tests {
             Ok::<_, TransportError>(())
         });
         let rows: [&[Option<&str>]; 2] = [&[Some("41"), Some("X'61'")], &[Some("42"), None]];
-        let session = far_end
-            .accept_one(&listener)
+        let session = accept_one(&far_end, &listener)
             .expect("accepting")
             .with_table(&["id", "payload"], &rows);
         let events = session.serve().expect("served");
@@ -561,5 +383,26 @@ mod tests {
             assert_eq!(arrived.bytes, payload, "{name}");
             assert!(arrived.origin_uri.starts_with("mysql://127.0.0.1:"));
         }
+    }
+
+    /// The Essentials runs one pair's rounds from its workers at once: each
+    /// round its own far end, every near end the pair's pool and the far
+    /// ends its one cache, the first logins full while it holds nothing.
+    #[test]
+    fn rounds_of_one_pair_at_once_each_return_their_payload() {
+        const ROUNDS: usize = 16;
+        let pair = MySqlTransport::loopback();
+        std::thread::scope(|scope| {
+            let rounds: Vec<_> = (0..ROUNDS)
+                .map(|n| {
+                    let pair = &pair;
+                    scope.spawn(move || pair.round(format!("round {n}").as_bytes()))
+                })
+                .collect();
+            for (n, round) in rounds.into_iter().enumerate() {
+                let arrived = round.join().expect("thread").expect("round");
+                assert_eq!(arrived.bytes, format!("round {n}").as_bytes());
+            }
+        });
     }
 }

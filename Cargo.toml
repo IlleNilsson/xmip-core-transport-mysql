@@ -15,8 +15,9 @@ path = "src/lib.rs"
 
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
-# (repository-model.md).
-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+# (repository-model.md); with its TLS, for the one reading of `tls` and
+# `tls_name` (`transport::sql::client_tls`).
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["tls"] }
 # The settings this technology declares (xcore::settings), read through
 # transport::Configured (ADR-0064, amendment 2026-09-26).
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
@@ -28,13 +29,16 @@ mariadb = { package = "xmip-core-library-mariadb", git = "https://github.com/Ill
 sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main" }
 # The operating system's random source, which OAEP's seed is drawn from.
 codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
-# caching_sha2_password: SHA-256 for the scramble, and RSA-OAEP for the
-# password sent to a server's public key outside TLS. MySQL pads with
-# OAEP over SHA-1, so sha1 is here as the digest rsa's OAEP takes; it
-# hashes nothing else.
-sha2 = "0.11"
+# caching_sha2_password: the estate's SHA-256 for the scramble
+# (codec::digest), and RSA-OAEP for the password sent to a server's public
+# key outside TLS. MySQL pads with OAEP over SHA-1, so sha1 is here as the
+# digest type rsa's OAEP takes, of the digest generation rsa 0.9 is built
+# on; it hashes nothing else.
 rsa = "0.9"
 sha1 = "0.10"
+# What a login checks the server by under TLS (`tls::ClientSettings`), and
+# the trust store the guarded login's test checks a certificate in.
+tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main" }
 
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test
@@ -42,8 +46,6 @@ sha1 = "0.10"
 transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
 # A self-signed certificate for the guarded login's test. Test-only.
 rcgen = "0.14"
-# The trust store the guarded login's test checks that certificate in.
-tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main" }
 
 [lints.rust]
 unsafe_code = "forbid"
