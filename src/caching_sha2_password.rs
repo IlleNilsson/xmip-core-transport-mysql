@@ -25,11 +25,11 @@
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use codec::digest::{Sha256, sha256};
 use mariadb::{Authentication, Conversation, Result, Step, Verification, protocol_error};
 use rsa::pkcs1::DecodeRsaPublicKey;
 use rsa::pkcs8::{DecodePublicKey, EncodePublicKey, LineEnding};
 use rsa::{Oaep, RsaPrivateKey, RsaPublicKey};
-use sha2::{Digest, Sha256};
 
 /// The plugin's name on the wire.
 pub const CACHING_SHA2_PASSWORD: &str = "caching_sha2_password";
@@ -52,12 +52,11 @@ pub fn scramble(password: &str, nonce: &[u8]) -> Vec<u8> {
     if password.is_empty() {
         return Vec::new();
     }
-    let first = Sha256::digest(password.as_bytes());
-    let second = Sha256::digest(first);
-    let third = Sha256::new()
-        .chain_update(second)
-        .chain_update(nonce)
-        .finalize();
+    let first = sha256(password.as_bytes());
+    let mut third = Sha256::new();
+    third.update(&sha256(&first));
+    third.update(nonce);
+    let third = third.finish();
     first.iter().zip(third.iter()).map(|(a, b)| a ^ b).collect()
 }
 
@@ -135,8 +134,17 @@ pub struct CachingSha2Cache {
 }
 
 impl CachingSha2Cache {
-    /// The key this process's far ends hold, made the first time a client
-    /// in the clear asks for it.
+    /// The key made now where it is not yet: what a far end does before a
+    /// client can reach it. Made on a client's request instead, a 2048-bit
+    /// key on a loaded machine outlasted the loopback's two seconds while
+    /// the clients of one pair's rounds waited for it (the Essentials,
+    /// 2026-11-13).
+    pub fn ready() {
+        Self::key();
+    }
+
+    /// The key this process's far ends hold, made once, by [`Self::ready`]
+    /// or the first time a client in the clear asks for it.
     fn key() -> &'static (RsaPrivateKey, String) {
         static KEY: LazyLock<(RsaPrivateKey, String)> = LazyLock::new(|| {
             let private = RsaPrivateKey::new(&mut Random, KEY_BITS).expect("an RSA key");
@@ -241,10 +249,10 @@ mod tests {
         let nonce: Vec<u8> = (1..=20).collect();
         let scrambled = scramble("secret", &nonce);
         assert_eq!(scrambled.len(), 32);
-        let first = Sha256::digest(b"secret");
-        let mut salted = Sha256::digest(Sha256::digest(b"secret")).to_vec();
+        let first = sha256(b"secret");
+        let mut salted = sha256(&sha256(b"secret")).to_vec();
         salted.extend_from_slice(&nonce);
-        let third = Sha256::digest(&salted);
+        let third = sha256(&salted);
         let expected: Vec<u8> = first.iter().zip(third.iter()).map(|(a, b)| a ^ b).collect();
         assert_eq!(scrambled, expected);
         assert_eq!(scramble("", &nonce), [] as [u8; 0]);

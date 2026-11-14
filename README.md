@@ -10,6 +10,11 @@ MySQL and MariaDB speak one client/server protocol, and it is
 What is MySQL's own is this crate's, so that whatever Oracle changes in MySQL
 lands here and nowhere else: the login.
 
+The transport is every SQL technology's, `transport::sql::SqlTransport`, over
+this crate's `MySql` wire (2026-11-13): its name and scheme, its settings, the
+dialect in the mode the session reads, MySQL's logins, and the far end its
+loopback serves (`accept_one`, `expecting`, `taken`).
+
 ## The login
 
 `caching_sha2_password`, MySQL's default since 8.0 and, since 9.0 removed
