@@ -385,7 +385,7 @@ mod tests {
         }
     }
 
-    /// The Essentials runs one pair's rounds from its workers at once: each
+    /// The System Tests run one pair's rounds from their workers at once: each
     /// round its own far end, every near end the pair's pool and the far
     /// ends its one cache, the first logins full while it holds nothing.
     #[test]
