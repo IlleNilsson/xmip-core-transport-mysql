@@ -32,37 +32,56 @@
 //! A send target is `mysql://host:3306/<database>/<table>/<column>`,
 //! `host:3306/<database>/<table>/<column>`, or `<table>/<column>` on the
 //! configured server and database.
+//!
+//! **Built with its `declaration` feature alone** the crate is
+//! [`declaration`], what a Location of it is configured with, and none of
+//! the code above, which is behind the default feature: what the surfaces'
+//! library carries (ADR-0064, amendment 2026-11-26).
 
+#[cfg(feature = "default")]
 pub mod caching_sha2_password;
 
-mod configured;
+#[cfg(feature = "declaration")]
+pub mod declaration;
 
+#[cfg(feature = "default")]
 use std::net::TcpListener;
+#[cfg(feature = "default")]
 use std::sync::Arc;
+#[cfg(feature = "default")]
 use std::time::Duration;
 
+#[cfg(feature = "default")]
 use mariadb::{Authentication, Client, Expecting, Insert, Logon, NativePassword, Session};
+#[cfg(feature = "default")]
 use sql::Dialect;
+#[cfg(feature = "default")]
 use tls::ClientSettings;
+#[cfg(feature = "default")]
 use transport::error::{Result, protocol_error};
-use transport::pool::alive;
-use transport::socket;
+#[cfg(feature = "default")]
 use transport::sql::{Probe, Rows, SqlTransport, Wire};
-use transport::{Login, Taken};
+#[cfg(feature = "default")]
+use transport::{Login, Taken, pool::alive, socket};
+#[cfg(feature = "default")]
 use xcore::settings::{Read, Settings};
 
+#[cfg(feature = "default")]
 pub use caching_sha2_password::{CachingSha2Cache, CachingSha2Password};
 
 /// The plugins this crate logs in with: MySQL's own first, and the native
 /// password a server may still switch an account to.
+#[cfg(feature = "default")]
 const PLUGINS: &[&dyn Authentication] = &[&CachingSha2Password, &NativePassword];
 
 /// A Location over a MySQL server.
+#[cfg(feature = "default")]
 pub type MySqlTransport = SqlTransport<MySql>;
 
 /// MySQL's wire: `xmip-core-library-mariadb`'s client with MySQL's
 /// logins, TLS before the login where asked for, and the far end's memory
 /// of a full login.
+#[cfg(feature = "default")]
 #[derive(Clone, Default)]
 pub struct MySql {
     /// TLS before the login, where asked for.
@@ -72,6 +91,7 @@ pub struct MySql {
     cache: Arc<CachingSha2Cache>,
 }
 
+#[cfg(feature = "default")]
 impl MySql {
     /// Logging in under TLS, as `guard` says.
     #[must_use]
@@ -95,12 +115,13 @@ impl MySql {
     }
 }
 
+#[cfg(feature = "default")]
 impl Wire for MySql {
     type Client = Client;
 
     const NAME: &'static str = "mysql";
-    const SCHEMES: &'static [&'static str] = &["mysql"];
-    const SETTINGS: &'static Settings = configured::SETTINGS;
+    const SCHEMES: &'static [&'static str] = declaration::SCHEMES;
+    const SETTINGS: &'static Settings = declaration::SETTINGS;
     /// A login with a password, so `caching_sha2_password` is spoken whole.
     const PROBE: Probe = Probe {
         database: "probe",
@@ -177,6 +198,7 @@ impl Wire for MySql {
 
 /// The login `transport`'s far end admits: its user and password, checked
 /// by `caching_sha2_password` against its cache.
+#[cfg(feature = "default")]
 #[must_use]
 pub fn expecting(transport: &MySqlTransport) -> Expecting<'_> {
     let login = transport.login();
@@ -188,6 +210,7 @@ pub fn expecting(transport: &MySqlTransport) -> Expecting<'_> {
 ///
 /// # Errors
 /// Where the connection could not be accepted or the login failed.
+#[cfg(feature = "default")]
 pub fn accept_one(transport: &MySqlTransport, listener: &TcpListener) -> Result<Session> {
     let (stream, _) = socket::accept_tcp(listener, transport.timeout())?;
     Ok(Session::accept(stream, &expecting(transport))?)
@@ -195,6 +218,7 @@ pub fn accept_one(transport: &MySqlTransport, listener: &TcpListener) -> Result<
 
 /// The Stream `insert` carries, as `transport`'s column holds it, its
 /// origin where `session` received it.
+#[cfg(feature = "default")]
 #[must_use]
 pub fn taken(transport: &MySqlTransport, session: &Session, insert: Insert) -> Taken {
     MySqlTransport::inserted(

@@ -12,30 +12,51 @@ path = "src/lib.rs"
 
 [dependencies]
 # A Technology depends on its parent Capability, never the reverse
-# (repository-model.md); with its TLS, for the one reading of `tls` and
-# `tls_name` (`transport::sql::client_tls`).
-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["tls"] }
+# (repository-model.md); with its TLS under the default feature, for the
+# one reading of `tls` and `tls_name` (`transport::sql::client_tls`). Its
+# declaration takes what every SQL Location declares (`transport::sql`),
+# which needs no TLS.
+transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
 # The settings this technology declares (xcore::settings), read through
 # transport::Configured (ADR-0064, amendment 2026-09-26).
 xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
 # The protocol MySQL shares with MariaDB, both halves, and the native
 # password a server may still switch an account to.
-mariadb = { package = "xmip-core-library-mariadb", git = "https://github.com/IlleNilsson/xmip-core-library-mariadb", branch = "main" }
+mariadb = { package = "xmip-core-library-mariadb", git = "https://github.com/IlleNilsson/xmip-core-library-mariadb", branch = "main", optional = true }
 # SQL: the dialect MySQL reads as MariaDB writes it — its literals, its
 # binary form, the INSERT a send writes — in the mode the session reads.
-sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main" }
+sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main", optional = true }
 # The operating system's random source, which OAEP's seed is drawn from.
-codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main" }
+codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main", optional = true }
 # caching_sha2_password: the estate's SHA-256 for the scramble
 # (codec::digest), and RSA-OAEP for the password sent to a server's public
 # key outside TLS. MySQL pads with OAEP over SHA-1, so sha1 is here as the
 # digest type rsa's OAEP takes, of the digest generation rsa 0.9 is built
 # on; it hashes nothing else.
-rsa = "0.9"
-sha1 = "0.10"
+rsa = { version = "0.9", optional = true }
+sha1 = { version = "0.10", optional = true }
 # What a login checks the server by under TLS (`tls::ClientSettings`), and
 # the trust store the guarded login's test checks a certificate in.
-tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main" }
+tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main", optional = true }
+
+[features]
+# The technology: its code, everything it is built on, and its declaration.
+# Without it the crate is its declaration alone (ADR-0064, amendments
+# 2026-10-22 and 2026-11-26).
+default = [
+    "declaration",
+    "transport/tls",
+    "dep:mariadb",
+    "dep:sql",
+    "dep:codec",
+    "dep:rsa",
+    "dep:sha1",
+    "dep:tls",
+]
+# The declaration alone: what a Location of this technology is configured
+# with, `declaration::SETTINGS` and `SCHEMES`, and none of
+# the code — what the surfaces' library is to carry (open problem 48).
+declaration = []
 
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test
