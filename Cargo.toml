@@ -16,18 +16,18 @@ path = "src/lib.rs"
 # one reading of `tls` and `tls_name` (`transport::sql::client_tls`). Its
 # declaration takes what every SQL Location declares (`transport::sql`),
 # which needs no TLS.
-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main" }
+transport = { workspace = true }
 # The settings this technology declares (xcore::settings), read through
 # transport::Configured (ADR-0064, amendment 2026-09-26).
-xcore = { package = "xmip-core", git = "https://github.com/IlleNilsson/xmip-core", branch = "main" }
+xcore = { workspace = true }
 # The protocol MySQL shares with MariaDB, both halves, and the native
 # password a server may still switch an account to.
-mariadb = { package = "xmip-core-library-mariadb", git = "https://github.com/IlleNilsson/xmip-core-library-mariadb", branch = "main", optional = true }
+mariadb = { workspace = true, optional = true }
 # SQL: the dialect MySQL reads as MariaDB writes it — its literals, its
 # binary form, the INSERT a send writes — in the mode the session reads.
-sql = { package = "xmip-core-library-sql", git = "https://github.com/IlleNilsson/xmip-core-library-sql", branch = "main", optional = true }
+sql = { workspace = true, optional = true }
 # The operating system's random source, which OAEP's seed is drawn from.
-codec = { package = "xmip-core-library-codec", git = "https://github.com/IlleNilsson/xmip-core-library-codec", branch = "main", optional = true }
+codec = { workspace = true, optional = true }
 # caching_sha2_password: the estate's SHA-256 for the scramble
 # (codec::digest), and RSA-OAEP for the password sent to a server's public
 # key outside TLS. MySQL pads with OAEP over SHA-1, so sha1 is here as the
@@ -37,7 +37,7 @@ rsa = { version = "0.9", optional = true }
 sha1 = { version = "0.10", optional = true }
 # What a login checks the server by under TLS (`tls::ClientSettings`), and
 # the trust store the guarded login's test checks a certificate in.
-tls = { package = "xmip-core-library-tls", git = "https://github.com/IlleNilsson/xmip-core-library-tls", branch = "main", optional = true }
+tls = { workspace = true, optional = true }
 
 [features]
 # The code and its declaration: the transport guide's "The declaration",
@@ -58,7 +58,7 @@ declaration = []
 [dev-dependencies]
 # The loopback payloads the tests drive, from the capability's test
 # support and never a production build (ADR-0044).
-transport = { package = "xmip-core-transport", git = "https://github.com/IlleNilsson/xmip-core-transport", branch = "main", features = ["test-support"] }
+transport = { workspace = true, features = ["test-support"] }
 # A self-signed certificate for the guarded login's test. Test-only.
 rcgen = "0.14"
 
